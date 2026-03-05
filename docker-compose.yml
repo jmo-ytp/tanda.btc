@@ -4,16 +4,15 @@ networks:
 
 services:
   bitcoind:
-    image: ruimarinho/bitcoin-core:26.0
+    image: lncm/bitcoind:v27.0
     networks:
       - tanda-net
     volumes:
-      - ./config/bitcoin-docker.conf:/home/bitcoin/.bitcoin/bitcoin.conf:ro
+      - ./config/bitcoin-docker.conf:/data/.bitcoin/bitcoin.conf:ro
     ports:
       - "18443:18443"
     healthcheck:
-      test: ["CMD", "bitcoin-cli", "-regtest",
-             "-rpcuser=user", "-rpcpassword=password",
+      test: ["CMD", "bitcoin-cli", "-datadir=/data/.bitcoin",
              "getblockchaininfo"]
       interval: 5s
       timeout: 5s
