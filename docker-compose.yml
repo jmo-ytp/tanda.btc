@@ -1,0 +1,101 @@
+networks:
+  tanda-net:
+    driver: bridge
+
+services:
+  bitcoind:
+    image: ruimarinho/bitcoin-core:26.0
+    networks:
+      - tanda-net
+    volumes:
+      - ./config/bitcoin-docker.conf:/home/bitcoin/.bitcoin/bitcoin.conf:ro
+    ports:
+      - "18443:18443"
+    healthcheck:
+      test: ["CMD", "bitcoin-cli", "-regtest",
+             "-rpcuser=user", "-rpcpassword=password",
+             "getblockchaininfo"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  p0:
+    build: .
+    networks:
+      - tanda-net
+    environment:
+      SK_IDX: "0"
+      SK_SEED: "participant_0_key"
+      BITCOIND_RPC_URL: "http://user:password@bitcoind:18443"
+    command: uvicorn tanda.api_participant:app --host 0.0.0.0 --port 8080
+    depends_on:
+      bitcoind:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  p1:
+    build: .
+    networks:
+      - tanda-net
+    environment:
+      SK_IDX: "1"
+      SK_SEED: "participant_1_key"
+      BITCOIND_RPC_URL: "http://user:password@bitcoind:18443"
+    command: uvicorn tanda.api_participant:app --host 0.0.0.0 --port 8080
+    depends_on:
+      bitcoind:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  p2:
+    build: .
+    networks:
+      - tanda-net
+    environment:
+      SK_IDX: "2"
+      SK_SEED: "participant_2_key"
+      BITCOIND_RPC_URL: "http://user:password@bitcoind:18443"
+    command: uvicorn tanda.api_participant:app --host 0.0.0.0 --port 8080
+    depends_on:
+      bitcoind:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  coordinator:
+    build: .
+    networks:
+      - tanda-net
+    environment:
+      BITCOIND_RPC_URL: "http://user:password@bitcoind:18443"
+      AMOUNT_BTC: "0.1"
+      T_CLAIM: "5"
+      T_REFUND: "10"
+    command: python scripts/run_coordinator.py
+    depends_on:
+      bitcoind:
+        condition: service_healthy
+      p0:
+        condition: service_healthy
+      p1:
+        condition: service_healthy
+      p2:
+        condition: service_healthy
