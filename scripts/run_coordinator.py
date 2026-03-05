@@ -62,7 +62,11 @@ K_MIN = 2
 
 BITCOIND_URL = os.environ.get("BITCOIND_RPC_URL", "http://user:password@bitcoind:18443")
 
-P_URLS = ["http://p0:8080", "http://p1:8080", "http://p2:8080"]
+P_URLS = [
+    os.environ.get("P0_URL", "http://p0:8080"),
+    os.environ.get("P1_URL", "http://p1:8080"),
+    os.environ.get("P2_URL", "http://p2:8080"),
+]
 
 
 # ── RPC helpers ────────────────────────────────────────────────────────────────

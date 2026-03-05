@@ -50,34 +50,31 @@ docker compose exec bitcoind bitcoin-cli -datadir=/data/.bitcoin getblockchainin
 
 ## Paso 2 — Cada PC arranca su servidor participante
 
-Cada servidor genera su clave privada a partir de `SK_SEED` (sha256 del string).
-El coordinador solo necesita las claves públicas — los secretos nunca salen del PC.
+Cada participante configura su propio `.env.local` y ejecuta `make participant`.
+Los secretos nunca salen del PC — el coordinador solo recibe la clave pública.
 
-**PC-A — P0:**
+**En cada PC**, copiar la plantilla y editarla:
 
 ```bash
-SK_IDX=0 \
-SK_SEED=participant_0_key \
-BITCOIND_RPC_URL=http://user:password@192.168.1.10:18443 \
-uvicorn tanda.api_participant:app --host 0.0.0.0 --port 8080
+cp .env.participant.example .env.local
+$EDITOR .env.local
 ```
 
-**PC-B — P1:**
+Valores a ajustar según el PC:
+
+| PC   | `SK_IDX` | `SK_SEED`           |
+|------|----------|---------------------|
+| PC-A | `0`      | secreto propio P0   |
+| PC-B | `1`      | secreto propio P1   |
+| PC-C | `2`      | secreto propio P2   |
+
+`BITCOIND_RPC_URL` es igual en los 3 PCs: `http://user:password@192.168.1.10:18443`
+
+Arrancar el servidor:
 
 ```bash
-SK_IDX=1 \
-SK_SEED=participant_1_key \
-BITCOIND_RPC_URL=http://user:password@192.168.1.10:18443 \
-uvicorn tanda.api_participant:app --host 0.0.0.0 --port 8080
-```
-
-**PC-C — P2:**
-
-```bash
-SK_IDX=2 \
-SK_SEED=participant_2_key \
-BITCOIND_RPC_URL=http://user:password@192.168.1.10:18443 \
-uvicorn tanda.api_participant:app --host 0.0.0.0 --port 8080
+make participant
+# equivalente: bash scripts/run_participant.sh
 ```
 
 Verificar que los tres responden:
@@ -93,36 +90,19 @@ curl http://192.168.1.12:8080/health
 
 ## Paso 3 — PC-A: configurar el coordinador
 
-El script `run_coordinator.py` lee las URLs de los participantes desde variables de
-entorno. Añade estas líneas a tu shell o a un archivo `.env.local`:
+Añade estas líneas al `.env.local` de PC-A (o expórtalas en el shell):
 
 ```bash
-export BITCOIND_RPC_URL=http://user:password@192.168.1.10:18443
-export P0_URL=http://192.168.1.10:8080
-export P1_URL=http://192.168.1.11:8080
-export P2_URL=http://192.168.1.12:8080
-export AMOUNT_BTC=0.1
-export T_CLAIM=5
-export T_REFUND=10
-```
-
-Para que `run_coordinator.py` use estas variables, edita las tres líneas de `P_URLS`:
-
-```python
-# scripts/run_coordinator.py
-P_URLS = [
-    os.environ.get("P0_URL", "http://p0:8080"),
-    os.environ.get("P1_URL", "http://p1:8080"),
-    os.environ.get("P2_URL", "http://p2:8080"),
-]
-```
-
-Alternativa sin tocar el código: agregar entradas en `/etc/hosts` de PC-A:
-
-```
-192.168.1.10  p0
-192.168.1.11  p1
-192.168.1.12  p2
+# .env.local en PC-A
+SK_IDX=0
+SK_SEED=secreto-propio-p0
+BITCOIND_RPC_URL=http://user:password@192.168.1.10:18443
+P0_URL=http://192.168.1.10:8080
+P1_URL=http://192.168.1.11:8080
+P2_URL=http://192.168.1.12:8080
+AMOUNT_BTC=0.1
+T_CLAIM=5
+T_REFUND=10
 ```
 
 ---
