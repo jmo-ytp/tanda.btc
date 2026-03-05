@@ -29,6 +29,7 @@ from io import BytesIO
 import hashlib
 import coincurve
 import httpx
+from bitcoinrpc.authproxy import AuthServiceProxy
 from embit.ec import PublicKey
 from embit.script import Script
 
@@ -211,27 +212,43 @@ def main() -> None:
     from embit.networks import NETWORKS as _NETS
     _mine_wif = _PK(hashlib.sha256(b"regtest_mine_key").digest()).wif(network=_NETS["regtest"])
 
-    print(f"Funding participants ({AMOUNT_BTC} BTC each)...", flush=True)
-    coinbases = rpc.scan_utxos(coord_addr)
-    if len(coinbases) < len(P_URLS):
-        raise RuntimeError(f"Expected {len(P_URLS)} coinbase UTXOs, found {len(coinbases)}")
+    # Only use mature coinbases (depth >= 100)
+    current_height = rpc.get_block_height()
+    all_utxos = rpc.scan_utxos(coord_addr)
+    mature = [u for u in all_utxos
+              if int(u.get("height", 0)) <= current_height - 100]
+    if not mature:
+        raise RuntimeError("No mature coinbases — mine more blocks first")
 
+    # Collect all wallet addresses first
+    print(f"Funding participants ({AMOUNT_BTC} BTC each)...", flush=True)
+    wallet_addrs = []
     for i, url in enumerate(P_URLS):
         r = httpx.get(f"{url}/wallet_address", timeout=10)
         if not r.content:
-            raise RuntimeError(f"P{i} ({url}) returned empty response for /wallet_address — check participant logs")
-        wallet_addr = r.json()["address"]
-        u = coinbases[i]
-        spk = u["scriptPubKey"] if isinstance(u["scriptPubKey"], str) else u["scriptPubKey"]["hex"]
-        rpc._fund_address_raw(wallet_addr, AMOUNT_BTC, [{
-            "txid": u["txid"], "vout": u["vout"],
-            "amount": float(u["amount"]),
-            "scriptPubKey": spk,
-            "privkey": _mine_wif,
-            "change_address": coord_addr,
-        }])
-        print(f"  Sent {AMOUNT_BTC} BTC → P{i} ({wallet_addr[:24]}...)", flush=True)
-    rpc.mine(1)  # confirm all funding txs
+            raise RuntimeError(f"P{i} ({url}) vacío en /wallet_address — revisa logs del participante")
+        wallet_addrs.append(r.json()["address"])
+
+    # Fund all participants in one transaction to avoid coinbase maturity issues
+    u = mature[0]
+    spk = u["scriptPubKey"] if isinstance(u["scriptPubKey"], str) else u["scriptPubKey"]["hex"]
+    fee_btc = 0.0001
+    change_btc = round(float(u["amount"]) - AMOUNT_BTC * len(P_URLS) - fee_btc, 8)
+    outputs = {addr: AMOUNT_BTC for addr in wallet_addrs}
+    if change_btc > 0.00000546:
+        outputs[coord_addr] = change_btc
+
+    base = AuthServiceProxy(rpc._base_url)
+    raw_tx = base.createrawtransaction([{"txid": u["txid"], "vout": u["vout"]}], outputs)
+    prevtxs = [{"txid": u["txid"], "vout": u["vout"], "scriptPubKey": spk,
+                "amount": float(u["amount"])}]
+    signed = base.signrawtransactionwithkey(raw_tx, [_mine_wif], prevtxs)
+    if not signed.get("complete"):
+        raise RuntimeError(f"Funding tx signing incomplete: {signed}")
+    base.sendrawtransaction(signed["hex"])
+    for i, addr in enumerate(wallet_addrs):
+        print(f"  Sent {AMOUNT_BTC} BTC → P{i} ({addr[:24]}...)", flush=True)
+    rpc.mine(1)  # confirm funding tx
 
     # ── 3. Tanda setup ────────────────────────────────────────────────────────
     print("\n--- Tanda Setup ---", flush=True)
