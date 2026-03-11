@@ -1,4 +1,7 @@
-# Tanda-BTC: Happy Path Diagrams
+# Tanda-BTC: Happy Path Diagrams — Capa On-Chain
+
+> **Nota:** Estos diagramas describen el camino cooperativo de la capa on-chain (Taproot + MuSig2).
+> El demo principal usa Lightning Network — ver [`sequence-diagrams-ln.md`](sequence-diagrams-ln.md).
 
 Diagramas del camino cooperativo completo: 3 rondas, 3 participantes,
 todos cooperan en cada ronda. La ruta keypath de MuSig2 se usa en todo momento.

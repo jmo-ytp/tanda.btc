@@ -173,11 +173,8 @@ FastAPI participant server. Reads `CLN_RPC_PATH` env var on startup.
 **Endpoints:**
 - `GET /health` → `{"status":"ok","pubkey_hex":"03...","channels":[...]}`
 - `GET /node_info` → `{"id":"03...","address":{"type":"ipv4",...}}`
-- `POST /invoice` `{"amount_msat":..., "label":..., "description":...}` → `{"bolt11":"lnbcrt..."}`
-- `POST /holdinvoice` `{"payment_hash":"hex","amount_msat":N}` → `{"status":"created"}`
-- `POST /settle` `{"preimage":"hex"}` → `{"status":"settled"}`
-- `POST /cancel` `{"payment_hash":"hex"}` → `{"status":"cancelled"}`
-- `GET /htlcs` `?payment_hash=hex` → `{"htlcs":[{"payment_hash":...,"amount_msat":...,"state":...}]}`
+- `POST /pay_invoice` `{"bolt11":"lnbcrt..."}` → `{"payment_hash":"hex"}` — participant pays coordinator's hold invoice (blocks until settled/cancelled by coordinator)
+- `POST /create_invoice` `{"amount_msat":N,"label":"str"}` → `{"bolt11":"lnbcrt..."}` — winner creates regular invoice so coordinator can pay the pot
 
 **Lifespan:** CLNRpc instance created once at startup; shared across requests via `app.state.cln`.
 

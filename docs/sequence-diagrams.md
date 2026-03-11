@@ -1,4 +1,7 @@
-# Tanda-BTC: Sequence Diagrams
+# Tanda-BTC: Sequence Diagrams — Capa On-Chain
+
+> **Nota:** Estos diagramas describen la capa on-chain del protocolo (Taproot + MuSig2 + HTLCs).
+> El demo principal usa Lightning Network — ver [`sequence-diagrams-ln.md`](sequence-diagrams-ln.md).
 
 Mermaid sequence diagrams for the full tanda protocol with 3 participants (P0, P1, P2).
 

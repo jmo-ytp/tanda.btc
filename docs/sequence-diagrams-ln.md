@@ -18,20 +18,20 @@ sequenceDiagram
     actor P1 as P1 CLN node
     actor P2 as P2 CLN node
 
-    Note over BC: mine(101) → bloque maduros
+    Note over BC: mine(101) → bloques maduros
 
-    BC-->>C: 200k sat (funding TX on-chain)
+    BC-->>C: N × 200k sat (funding TX on-chain)<br/>para N=3: 600k sat + fee → cln_coord_addr
 
-    C->>P0: connect(node_id, "cln-p0", 9735)
+    C->>P0: connect(node_id, host_p0, 9735)
     C->>P0: fund_channel(200k sat, push=150k sat)
     Note over C,P0: Canal: coord→p0<br/>Coord: 50k sat local<br/>P0: 150k sat local
     BC-->>BC: mine(1) → confirma change UTXO<br/>(CLN solo gasta UTXOs confirmados)
 
-    C->>P1: connect(node_id, "cln-p1", 9735)
+    C->>P1: connect(node_id, host_p1, 9735)
     C->>P1: fund_channel(200k sat, push=150k sat)
     BC-->>BC: mine(1) → confirma change UTXO
 
-    C->>P2: connect(node_id, "cln-p2", 9735)
+    C->>P2: connect(node_id, host_p2, 9735)
     C->>P2: fund_channel(200k sat, push=150k sat)
 
     BC-->>BC: mine(6) → 6 confirmaciones para CHANNELD_NORMAL
