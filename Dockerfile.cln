@@ -1,0 +1,14 @@
+FROM elementsproject/lightningd:latest
+
+# Install curl for downloading the hold plugin binary
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && \
+    rm -rf /var/lib/apt/lists/*
+
+# Download pre-compiled hold plugin binary (BoltzExchange/hold).
+# The tar contains: build/hold-linux-amd64
+ARG HOLD_VERSION=0.3.3
+RUN curl -fsSL \
+    "https://github.com/BoltzExchange/hold/releases/download/v${HOLD_VERSION}/hold-linux-amd64.tar.gz" \
+    | tar -xz -C /tmp/ && \
+    install -m 755 /tmp/build/hold-linux-amd64 /usr/local/bin/hold && \
+    rm -rf /tmp/build

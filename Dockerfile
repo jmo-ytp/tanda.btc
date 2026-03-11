@@ -11,5 +11,6 @@ RUN pip install --no-cache-dir -r requirements.txt -r requirements-demo.txt
 
 COPY tanda/ ./tanda/
 COPY scripts/ ./scripts/
+COPY tests/ ./tests/
 
 ENV PYTHONPATH=/app
