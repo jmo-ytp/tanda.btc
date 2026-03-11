@@ -1,53 +1,63 @@
 # Tanda-BTC: Diagramas de Secuencia — Lightning Network
 
 Diagramas Mermaid del protocolo tanda sobre Lightning Network con 3 participantes (P0, P1, P2).
-El coordinador usa **hold invoices** (HTLCs manuales) de CLN para preservar la garantía trustless.
+El coordinador usa **hold invoices** (BoltzExchange/hold plugin para CLN) para preservar la
+garantía trustless.
 
 ---
 
 ## 1. Bootstrap: topología de canales
 
-El coordinador abre un canal hacia cada participante y hace **push** de sats para darles
-capacidad de salida. Esto ocurre una sola vez antes de las rondas.
+El coordinador abre un canal hacia cada participante con push de liquidez.
+Ocurre una sola vez antes de las rondas.
 
 ```mermaid
 sequenceDiagram
     actor BC as Bitcoin Core<br/>(regtest)
     actor C  as Coordinador<br/>(CLN node)
-    actor P0 as P0 CLN node
-    actor P1 as P1 CLN node
-    actor P2 as P2 CLN node
+    actor AP0 as API P0<br/>(:8080)
+    actor AP1 as API P1<br/>(:8081)
+    actor AP2 as API P2<br/>(:8082)
 
     Note over BC: mine(101) → bloques maduros
 
-    BC-->>C: N × 200k sat (funding TX on-chain)<br/>para N=3: 600k sat + fee → cln_coord_addr
+    BC-->>C: N × 200k sat + fee<br/>(funding TX on-chain → cln_coord_addr)<br/>para N=3: ~0.0061 BTC
 
-    C->>P0: connect(node_id, host_p0, 9735)
-    C->>P0: fund_channel(200k sat, push=150k sat)
-    Note over C,P0: Canal: coord→p0<br/>Coord: 50k sat local<br/>P0: 150k sat local
-    BC-->>BC: mine(1) → confirma change UTXO<br/>(CLN solo gasta UTXOs confirmados)
+    Note over C: wait_cln_funds() — espera UTXOs confirmados
 
-    C->>P1: connect(node_id, host_p1, 9735)
-    C->>P1: fund_channel(200k sat, push=150k sat)
-    BC-->>BC: mine(1) → confirma change UTXO
+    C->>AP0: GET /node_info
+    AP0-->>C: {id: "03aabb...", address: {host, port}}
+    C->>AP1: GET /node_info
+    AP1-->>C: {id: "03ccdd...", address: {host, port}}
+    C->>AP2: GET /node_info
+    AP2-->>C: {id: "03eeff...", address: {host, port}}
 
-    C->>P2: connect(node_id, host_p2, 9735)
-    C->>P2: fund_channel(200k sat, push=150k sat)
+    C->>C: cln.connect("03aabb...", host_p0, 9735)
+    C->>C: cln.fund_channel("03aabb...", 200k sat, push_msat=150,000,000)
+    Note over C: Canal coord→P0 abierto<br/>Coord: 50k sat local | P0: 150k sat local
+    BC-->>BC: mine(1) → change UTXO confirmado<br/>(CLN solo gasta UTXOs confirmados)
 
-    BC-->>BC: mine(6) → 6 confirmaciones para CHANNELD_NORMAL
+    C->>C: cln.connect("03ccdd...", host_p1, 9735)
+    C->>C: cln.fund_channel("03ccdd...", 200k sat, push_msat=150,000,000)
+    BC-->>BC: mine(1) → change UTXO confirmado
 
-    Note over C,P2: Todos los canales llegan a<br/>estado CHANNELD_NORMAL
+    C->>C: cln.connect("03eeff...", host_p2, 9735)
+    C->>C: cln.fund_channel("03eeff...", 200k sat, push_msat=150,000,000)
+
+    BC-->>BC: mine(6) → 6 confirmaciones → CHANNELD_NORMAL
+
+    Note over C,AP2: Bootstrap completo.<br/>Cada participante tiene 150k sat outbound<br/>— suficiente para N rondas de 10k sat.
 ```
-
-**Resultado:** Cada participante tiene 150k sat de capacidad de salida hacia el coordinador
-— suficiente para pagar N rondas de 10k sat cada una.
 
 ---
 
 ## 2. Ronda completa: camino feliz (happy path)
 
-El coordinador usa **N preimages distintas** (una por participante) porque CLN rechaza
+El coordinador genera **N preimages distintas** (una por participante) porque CLN rechaza
 múltiples hold invoices con el mismo `payment_hash`.
+
+Las llamadas `POST /pay_invoice` se ejecutan en un `ThreadPoolExecutor` — son **no bloqueantes**
+para el coordinador, que sigue ejecutando `wait_all_accepted` mientras los threads corren.
 
 ```mermaid
 sequenceDiagram
@@ -56,67 +66,56 @@ sequenceDiagram
     actor P1 as API P1
     actor P2 as API P2 (ganador)
 
-    Note over C: preimage_i = os.urandom(32) × 3<br/>payment_hash_i = SHA256(preimage_i)<br/>Ganador esta ronda: P2<br/><br/>Preimages quedan SECRET con el coordinador
+    Note over C: preimage_i = os.urandom(32) × 3<br/>payment_hash_i = SHA256(preimage_i)<br/>Ganador esta ronda: P2
 
-    C->>C: holdinvoice(payment_hash=H_0, amount=10k sat)<br/>→ bolt11_0
+    C->>C: cln.holdinvoice(H_0, amount=10,000,000 msat) → bolt11_0
+    C->>C: cln.holdinvoice(H_1, amount=10,000,000 msat) → bolt11_1
+    C->>C: cln.holdinvoice(H_2, amount=10,000,000 msat) → bolt11_2
 
-    C->>C: holdinvoice(payment_hash=H_1, amount=10k sat)<br/>→ bolt11_1
+    Note over C: ThreadPoolExecutor.submit() × 3<br/>(no bloqueante — threads corren en paralelo)
 
-    C->>C: holdinvoice(payment_hash=H_2, amount=10k sat)<br/>→ bolt11_2
+    C-)P0: POST /pay_invoice {bolt11_0}
+    C-)P1: POST /pay_invoice {bolt11_1}
+    C-)P2: POST /pay_invoice {bolt11_2}
 
-    par Distribuir bolt11 y cobrar en paralelo
-        C->>P0: POST /pay_invoice {bolt11_0}
-        Note over P0: cln.pay(bolt11_0)<br/>[BLOQUEANTE hasta settle/cancel]
-    and
-        C->>P1: POST /pay_invoice {bolt11_1}
-        Note over P1: cln.pay(bolt11_1)<br/>[BLOQUEANTE hasta settle/cancel]
-    and
-        C->>P2: POST /pay_invoice {bolt11_2}
-        Note over P2: cln.pay(bolt11_2)<br/>[BLOQUEANTE hasta settle/cancel]
+    Note over P0: cln.pay(bolt11_0) — bloqueante<br/>HTLC_0 se bloquea en el nodo coord
+    Note over P1: cln.pay(bolt11_1) — bloqueante<br/>HTLC_1 se bloquea en el nodo coord
+    Note over P2: cln.pay(bolt11_2) — bloqueante<br/>HTLC_2 se bloquea en el nodo coord
+
+    loop wait_all_accepted (poll cada 1s, timeout=120s)
+        C->>C: get_incoming_htlc_hashes()<br/>vía listpeerchannels()
+        C->>C: ¿los 3 payment_hashes en HTLCs direction=in?
     end
 
-    Note over P0,C: HTLC_0 bloqueado en coord<br/>(update_add_htlc → P0 debita 10k sat)
-    Note over P1,C: HTLC_1 bloqueado en coord
-    Note over P2,C: HTLC_2 bloqueado en coord
+    Note over C: ✓ 3/3 HTLCs aceptados
 
-    loop Poll vía listpeerchannels (cada 0.5s)
-        C->>C: get_incoming_htlc_hashes()
-        C->>C: ¿los 3 payment_hashes están<br/>en HTLCs entrantes?
-    end
+    C->>P2: POST /create_invoice {amount_msat: 30,000,000, label: "pot-round-k"}
+    P2-->>C: {bolt11: bolt11_pot}
 
-    Note over C: ✓ Los 3 HTLCs están aceptados
+    C->>C: cln.pay(bolt11_pot)<br/>P2 recibe 30k sat ANTES de que coord recupere nada
 
-    C->>P2: POST /create_invoice {amount=30k sat}
-    P2-->>C: bolt11_pot
+    Note over C: Settle — revela preimages en orden
+    C->>C: cln.settle_holdinvoice(preimage_0.hex())
+    C->>C: cln.settle_holdinvoice(preimage_1.hex())
+    C->>C: cln.settle_holdinvoice(preimage_2.hex())
 
-    C->>C: cln.pay(bolt11_pot)<br/>→ P2 recibe 30k sat (el bote)
-
-    Note over C: Settle en orden — cada settleholdinvoice<br/>revela la preimage que el coordinador guardó en secreto
-
-    C->>C: settleholdinvoice(preimage_0)<br/>→ plugin deriva H_0=SHA256(P_0), liquida HTLC
-
-    C->>C: settleholdinvoice(preimage_1)
-
-    C->>C: settleholdinvoice(preimage_2)
-
-    Note over P0: update_fulfill_htlc recibido<br/>cln.pay() retorna OK
+    Note over P0: update_fulfill_htlc recibido<br/>cln.pay() retorna → thread libera
     P0-->>C: 200 OK {payment_hash}
-
     Note over P1: update_fulfill_htlc recibido
     P1-->>C: 200 OK {payment_hash}
-
-    Note over P2: update_fulfill_htlc recibido<br/>cln.pay() retorna OK
+    Note over P2: update_fulfill_htlc recibido
     P2-->>C: 200 OK {payment_hash}
 
-    Note over C,P2: Ronda completa.<br/>P2 neto: +20k sat (ganó 30k, pagó 10k).<br/>P0, P1 neto: -10k sat cada uno.
+    Note over C: fut.result() × 3 → ronda completa
+    Note over C,P2: P2 neto: +20k sat (ganó 30k, pagó 10k)<br/>P0, P1 neto: −10k sat cada uno
 ```
 
 ---
 
 ## 3. Garantía trustless: flujo de HTLCs
 
-Este diagrama muestra por qué el protocolo es trustless: los fondos de los participantes
-solo se liberan **después** de que el coordinador paga al ganador.
+Por qué el protocolo es trustless: los fondos de los participantes solo se liberan
+**después** de que el coordinador pague al ganador.
 
 ```mermaid
 sequenceDiagram
@@ -124,23 +123,20 @@ sequenceDiagram
     actor C  as Coordinador
     actor P2 as P2 (ganador)
 
-    Note over P0,P2: Los 3 HTLCs están bloqueados<br/>en el nodo del coordinador
+    Note over P0,P2: Los 3 HTLCs están bloqueados<br/>en el nodo del coordinador (estado ACCEPTED)
 
     rect rgb(255, 245, 200)
         Note over C: SI el coordinador NO paga al ganador...
-        Note over P0,P2: Los hold invoices expiran<br/>(cltv=40 bloques alcanzado)
-        C-->>P0: update_fail_htlc (HTLC expirado)
-        C-->>P2: update_fail_htlc (HTLC expirado)
-        Note over P0: P0 recupera sus 10k sat<br/>automáticamente
-        Note over P2: P2 recupera sus 10k sat<br/>automáticamente
+        Note over P0,P2: Los hold invoices expiran por CLTV<br/>(timeout configurado por CLN)
+        Note over P0: HTLC devuelto automáticamente<br/>P0 recupera sus 10k sat
+        Note over P2: HTLC devuelto automáticamente<br/>P2 recupera sus 10k sat
     end
 
     rect rgb(220, 255, 220)
         Note over C: SI el coordinador paga al ganador...
-        C->>P2: pay(bolt11_pot) → 30k sat
+        C->>P2: cln.pay(bolt11_pot) → 30k sat
         Note over P2: P2 recibe el bote ANTES<br/>de que el coordinador reciba nada
-        C->>C: settleholdinvoice(preimage_i) × 3<br/>plugin deriva H_i=SHA256(P_i) internamente
-        Note over C: El coordinador recupera 3 × 10k sat<br/>SOLO DESPUÉS de pagar al ganador
+        C->>C: settle_holdinvoice(preimage_i) × 3<br/>→ coord recupera 3 × 10k sat<br/>SOLO DESPUÉS de haber pagado al ganador
     end
 ```
 
@@ -149,10 +145,11 @@ Si no paga, los HTLCs expiran y los participantes recuperan sus sats sin pérdid
 
 ---
 
-## 4. Fallback: cancelación antes del pago
+## 4. Fallback: timeout de participante
 
-Si el coordinador detecta que no todos los participantes pagaron a tiempo,
-cancela todos los hold invoices.
+Si no todos los participantes pagan dentro del plazo, `wait_all_accepted` lanza
+`TimeoutError` y la ronda aborta. El coordinador **no llama activamente** a
+`cancel_holdinvoice` — los hold invoices expiran por CLTV automáticamente.
 
 ```mermaid
 sequenceDiagram
@@ -161,26 +158,30 @@ sequenceDiagram
     actor P1 as P1 (no pagó)
     actor P2 as P2 (no pagó)
 
-    C->>C: holdinvoice(payment_hash=H_0, amount=10k sat) → bolt11_0
-    C->>C: holdinvoice(payment_hash=H_1, amount=10k sat) → bolt11_1
-    C->>C: holdinvoice(payment_hash=H_2, amount=10k sat) → bolt11_2
+    C->>C: holdinvoice(H_0) → bolt11_0
+    C->>C: holdinvoice(H_1) → bolt11_1
+    C->>C: holdinvoice(H_2) → bolt11_2
 
-    C->>P0: POST /pay_invoice {bolt11_0}
+    C-)P0: POST /pay_invoice {bolt11_0}
+    C-)P1: POST /pay_invoice {bolt11_1}
+    C-)P2: POST /pay_invoice {bolt11_2}
+
     Note over P0: HTLC_0 bloqueado en coord
 
-    Note over C: Timeout: P1 y P2 no pagaron<br/>dentro del plazo (t_claim bloques)
+    loop wait_all_accepted (cada 1s, timeout=120s)
+        C->>C: get_incoming_htlc_hashes()
+        C->>C: 1/3 HTLCs aceptados — sigue esperando
+    end
 
-    C->>C: cancel_holdinvoice(payment_hash_0)
-    Note over C: update_fail_htlc enviado a P0
+    Note over C: TimeoutError: solo 1/3 HTLCs aceptados<br/>run_round_ln() lanza excepción — ronda abortada
 
-    C->>C: cancel_holdinvoice(payment_hash_1)
-    C->>C: cancel_holdinvoice(payment_hash_2)
-
-    Note over P0: P0 recupera sus 10k sat<br/>(HTLC devuelto)
-    P0-->>C: pay() retorna error (cancelled)
-
-    Note over C,P2: Nadie pierde nada.<br/>Ronda abortada limpiamente.
+    Note over P0,P2: Los hold invoices expiran por CLTV<br/>(no hay cancel_holdinvoice explícito)
+    Note over P0: P0 recupera sus 10k sat<br/>cuando el HTLC expira
 ```
+
+> **Nota de implementación:** `CLNRpc.cancel_holdinvoice()` existe pero no está conectado
+> al flujo actual. Si se necesita cancelación activa e inmediata, llamar a
+> `cancel_holdinvoice(payment_hash)` por cada invoice antes de abortar.
 
 ---
 
@@ -192,20 +193,20 @@ Vista estática de canales y flujo de valor en una ronda donde P2 gana.
 flowchart LR
     subgraph LN["Red Lightning (regtest)"]
         direction TB
-        C["Coordinador\n(CLN node)\n50k sat local"]
+        C["Coordinador\n(CLN node)\n50k sat local\npor canal"]
 
-        C -- "canal 200k sat\npush 150k → P0" --- P0["P0\n150k sat local\n(outbound)"]
-        C -- "canal 200k sat\npush 150k → P1" --- P1["P1\n150k sat local\n(outbound)"]
-        C -- "canal 200k sat\npush 150k → P2" --- P2["P2\n150k sat local\n(outbound)"]
+        C -- "canal 200k sat\npush 150k → P0" --- P0["P0\n150k sat outbound"]
+        C -- "canal 200k sat\npush 150k → P1" --- P1["P1\n150k sat outbound"]
+        C -- "canal 200k sat\npush 150k → P2" --- P2["P2\n150k sat outbound"]
     end
 
     subgraph Round["Flujo de sats en la ronda (P2 gana)"]
         direction LR
-        S0["P0 paga\n10k sat →"] --> SC["Coord\nretiene\n30k sat\n(HTLCs)"]
-        S1["P1 paga\n10k sat →"] --> SC
-        S2["P2 paga\n10k sat →"] --> SC
-        SC --> SW["→ P2 recibe\n30k sat\n(el bote)"]
-        SW --> SS["Coord settle:\nrecupera 30k sat"]
+        S0["P0 paga\n10k sat"] --> SC["Coord retiene\n30k sat\n(HTLCs ACCEPTED)"]
+        S1["P1 paga\n10k sat"] --> SC
+        S2["P2 paga\n10k sat"] --> SC
+        SC --> SW["P2 recibe\n30k sat\n(bote)"]
+        SW --> SS["Coord settle:\nrecupera 30k sat\n(net = 0)"]
     end
 ```
 
@@ -215,12 +216,13 @@ flowchart LR
 
 | | On-chain | Lightning |
 |---|---|---|
-| Fee por aportación | ~2,000 sat (20% de 10k sat) | ~0–10 sat (<0.1%) |
-| Tiempo de confirmación | ~10 min por bloque | instantáneo |
-| Garantía trustless | Taproot HTLC + CSV | Hold invoices + expiración CLTV |
-| Privacidad | Pública en blockchain | Off-chain, solo canal visible |
-| Complejidad técnica | Taproot + MuSig2 | CLN + holdinvoice plugin |
-| Requiere nodo LN | No | Sí (CLN con holdinvoice plugin) |
+| Fee por aportación | ~2,000 sat (varias TXs on-chain) | ~0–10 sat (pagos off-chain) |
+| Tiempo de liquidación | ~10 min por confirmación | instantáneo |
+| Garantía trustless | Taproot HTLC + CSV timelock | Hold invoices + expiración CLTV |
+| Privacidad | Direcciones y montos públicos en blockchain | Off-chain; solo apertura/cierre de canal visible |
+| Complejidad técnica | Taproot + MuSig2 + BIP-341/342 | CLN + BoltzExchange/hold plugin |
+| Requiere nodo LN | No | Sí (CLN con hold plugin) |
+| Fallback si coord desaparece | Reclamar via leaf1 (HTLC) o leaf2 (refund CSV) | HTLCs expiran por CLTV → fondos devueltos |
 
 El protocolo LN preserva la garantía trustless del diseño on-chain original:
 los participantes solo pierden sus sats si el coordinador cumple su parte.
