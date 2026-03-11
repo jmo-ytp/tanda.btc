@@ -10,22 +10,31 @@ A trustless tanda/rosca savings circle on Bitcoin regtest. Participants each con
 
 ```bash
 # Install dependencies
-pip install -r requirements.txt
+pip install -r requirements.txt -r requirements-demo.txt
 
-# Unit tests — no Bitcoin node required
-python -m pytest tests/test_protocol.py tests/test_coordinator.py -v
+# Unit tests — no node required (on-chain + LN mocks)
+python -m pytest tests/test_protocol.py tests/test_coordinator.py \
+                 tests/test_lnrpc.py tests/test_api_participant_ln.py -v
+make test
 
 # Single unit test class
 python -m pytest tests/test_protocol.py::TestMuSig2 -v
 
-# Single e2e test class
-python -m pytest tests/test_e2e_regtest.py::TestRound0Cooperative -v -s
-
 # E2E regtest tests — requires a running Bitcoin Core node
-python -m pytest tests/test_e2e_regtest.py -v -s
-
-# Start the regtest node (idempotent)
 bash scripts/regtest_setup.sh
+python -m pytest tests/test_e2e_regtest.py -v -s
+make test-e2e
+
+# E2E Docker LN tests — requires Docker
+make test-ln
+
+# Demo single machine
+make demo
+make demo-interactive
+
+# Demo multi-PC (simula N PCs en una sola máquina)
+make multipc
+make multipc-interactive
 
 # Stop the regtest node
 bitcoin-cli -regtest stop
@@ -37,20 +46,35 @@ Bitcoin Core is compiled **without wallet support**. Mining uses `getblocktempla
 
 ```
 tanda/
-  protocol.py      — Taproot scripts, transaction builders, BIP-341/342 sighash
-  musig2.py        — BIP-327 MuSig2 implementation (key agg, nonce gen, signing, aggregation)
-  htlc.py          — HTLC secret generation and preimage verification
-  coordinator.py   — Trustless round orchestration (setup, collect contributions, MuSig2 flow, fallbacks)
-  participant.py   — Participant actions (contribute, nonce gen, sign_claim, HTLC claim, refund)
-  rpc.py           — Bitcoin Core JSON-RPC wrapper (wallet-less + wallet paths)
+  protocol.py           — Taproot scripts, transaction builders, BIP-341/342 sighash
+  musig2.py             — BIP-327 MuSig2 implementation (key agg, nonce gen, signing, aggregation)
+  htlc.py               — HTLC secret generation and preimage verification
+  coordinator.py        — Trustless round orchestration (setup, collect contributions, MuSig2 flow, fallbacks)
+  participant.py        — Participant actions (contribute, nonce gen, sign_claim, HTLC claim, refund)
+  rpc.py                — Bitcoin Core JSON-RPC wrapper (wallet-less + wallet paths)
+  lnrpc.py              — CLN RPC wrapper over pyln-client unix socket
+  api_participant_ln.py — FastAPI participant server (CLN_RPC_PATH env var, hold invoice endpoints)
+  ledger.py             — Per-participant debt/pot ledger with JSON persistence
 
 tests/
-  test_protocol.py      — Unit tests for scripts, transactions, MuSig2 (no node)
-  test_coordinator.py   — Unit tests for coordinator + participant with mock RPC (no node)
-  test_e2e_regtest.py   — Full regtest integration: Round0 (cooperative), Round1 (HTLC), Round2 (refund)
+  test_protocol.py           — Unit: scripts, transactions, MuSig2 (no node)
+  test_coordinator.py        — Unit: coordinator + participant with mock RPC (no node)
+  test_lnrpc.py              — Unit: CLNRpc with mock (no node)
+  test_api_participant_ln.py — Unit: FastAPI endpoints with mock CLN (no node)
+  test_e2e_regtest.py        — E2E regtest: Round0 cooperative, Round1 HTLC, Round2 refund
+  test_e2e_ln_docker.py      — E2E Docker: full LN protocol with live CLN nodes
 
 scripts/
-  regtest_setup.sh — Start bitcoind regtest, mine initial blocks
+  regtest_setup.sh       — Start bitcoind regtest, mine initial blocks
+  run_coordinator_ln.py  — LN demo coordinator: bootstrap channels + N rounds via hold invoices
+  start_coordinator.sh   — Multi-PC: bitcoind + CLN coordinator + coordinator script
+  start_participant.sh   — Multi-PC: CLN node + FastAPI on participant's PC
+  test_local_multipc.sh  — Simulate N PCs on one machine (shifted ports per participant)
+
+deploy/
+  coord.yml / coord.local.yml       — Multi-PC coordinator stack
+  participant.yml                   — Multi-PC participant stack
+  run.yml / run.local.yml           — Multi-PC coordinator script container
 ```
 
 ### Module import layering

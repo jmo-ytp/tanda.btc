@@ -6,7 +6,9 @@ A trustless tanda/rosca savings circle implemented on Bitcoin using Taproot, MuS
 
 A tanda (also called rosca, susu, or hui) is a rotating savings circle: N participants each contribute the same amount every round. One participant wins the full pot each round, rotating until everyone has received it once. Traditionally this requires trust in an organizer. This implementation removes that trust entirely.
 
-## Protocol overview
+## Protocol layers
+
+### On-chain layer (Taproot + MuSig2)
 
 Each round, all N participants send their contribution to a shared **Taproot address**. The output key is the MuSig2 aggregate of all participant public keys. The script tree provides two fallback paths if cooperation fails:
 
@@ -17,103 +19,114 @@ Taproot output
 └── leaf2    — <T_refund> OP_CSV OP_DROP  +  thresh(k_min, P₁, …, Pₙ)  →  collective refund
 ```
 
-### Spending paths
-
 | Path | Who | When | How |
 |---|---|---|---|
 | **Keypath** | All participants | Cooperative case | MuSig2 aggregate signature pays winner |
-| **Leaf 1 (HTLC)** | Round winner Pₖ | Coordinator disappears after `t_claim` blocks | Pₖ signs + reveals SHA-256 preimage published by coordinator |
-| **Leaf 2 (Refund)** | k_min-of-N participants | Winner disappears after `t_refund` blocks | Schnorr multisig (OP_CHECKSIGADD) returns funds pro-rata |
+| **Leaf 1 (HTLC)** | Round winner Pₖ | Coordinator disappears after `t_claim` blocks | Pₖ signs + reveals SHA-256 preimage |
+| **Leaf 2 (Refund)** | k_min-of-N participants | Winner disappears after `t_refund` blocks | Schnorr multisig returns funds pro-rata |
 
-The coordinator is a **trustless** role: it generates HTLC secrets, builds transactions, and orchestrates the MuSig2 signing round, but it can never steal funds. Any participant can fill the coordinator role.
+### Lightning Network layer (CLN + hold invoices)
+
+The demo runs over Lightning Network using Core Lightning (CLN) with the BoltzExchange/hold plugin. Each round:
+
+1. Coordinator issues N **hold invoices** (one per participant) — HTLCs lock in coordinator's node
+2. All participants pay their invoice → funds locked but not settled
+3. Coordinator verifies all N HTLCs accepted, then pays the winner via a regular invoice
+4. Coordinator settles all hold invoices, recovering N × contribution from participants
+
+The coordinator never has unilateral access to funds: if it disappears after step 2, participants' HTLCs time out and refund automatically.
 
 ## Architecture
 
 ```
 tanda/
-  protocol.py      — Taproot scripts, transaction builders, BIP-341/342 sighash
-  musig2.py        — BIP-327 MuSig2 (key aggregation, nonce gen, partial signing, aggregation)
-  htlc.py          — HTLC secret generation and preimage verification
-  coordinator.py   — Round orchestration: setup, contribution monitoring, MuSig2 flow, fallbacks
-  participant.py   — Participant: contribute, sign claim, claim via HTLC, sign refund
-  rpc.py           — Bitcoin Core JSON-RPC wrapper (wallet-less + wallet paths)
+  protocol.py           — Taproot scripts, transaction builders, BIP-341/342 sighash
+  musig2.py             — BIP-327 MuSig2 (key aggregation, nonce gen, partial signing, aggregation)
+  htlc.py               — HTLC secret generation and preimage verification
+  coordinator.py        — On-chain round orchestration: setup, MuSig2 flow, fallbacks
+  participant.py        — On-chain participant: contribute, sign claim, HTLC claim, sign refund
+  rpc.py                — Bitcoin Core JSON-RPC wrapper (wallet-less + wallet paths)
+  lnrpc.py              — CLN RPC wrapper (pyln-client unix socket)
+  api_participant_ln.py — FastAPI participant server (hold invoice endpoints)
+  ledger.py             — Per-participant debt/pot ledger (JSON persistence)
 
 tests/
-  test_protocol.py      — Unit tests: scripts, MuSig2, transactions (no node required)
-  test_coordinator.py   — Unit tests: coordinator + participant with mock RPC (no node required)
-  test_e2e_regtest.py   — End-to-end regtest: cooperative, HTLC fallback, refund fallback
+  test_protocol.py           — Unit: scripts, MuSig2, transactions (no node)
+  test_coordinator.py        — Unit: coordinator + participant with mock RPC (no node)
+  test_lnrpc.py              — Unit: CLNRpc with mock (no node)
+  test_api_participant_ln.py — Unit: FastAPI endpoints with mock CLN (no node)
+  test_e2e_regtest.py        — E2E regtest: cooperative, HTLC fallback, refund fallback
+  test_e2e_ln_docker.py      — E2E Docker: full LN protocol with live CLN nodes
 
 scripts/
-  regtest_setup.sh — Start bitcoind regtest and mine initial blocks
+  regtest_setup.sh       — Start bitcoind regtest and mine initial blocks
+  run_coordinator_ln.py  — LN demo coordinator: bootstrap channels + N rounds
+  start_coordinator.sh   — Multi-PC: start bitcoind + CLN coordinator, run rounds
+  start_participant.sh   — Multi-PC: start CLN node + FastAPI on a participant PC
+  test_local_multipc.sh  — Simulate N PCs on one machine (shifted ports)
+
+deploy/
+  coord.yml              — Multi-PC: bitcoind + CLN coordinator (coordinator's PC)
+  participant.yml        — Multi-PC: CLN node + FastAPI (participant's PC)
+  run.yml                — Multi-PC: coordinator script container
+  *.local.yml            — Linux overrides (extra_hosts)
+```
+
+## Running the demo
+
+### Option A — Single machine
+
+```bash
+# Full LN stack (bitcoind + coordinator CLN + N participant CLN + N FastAPI):
+docker compose up --build
+make demo
+
+# Run coordinator interactively (pause between rounds):
+INTERACTIVE=1 docker compose run --rm -it coordinator
+make demo-interactive
+```
+
+### Option B — Multi-PC (live demo)
+
+```bash
+# On each participant's PC:
+./scripts/start_participant.sh 192.168.1.10   # coordinator's IP
+
+# On the coordinator's PC:
+INTERACTIVE=1 ./scripts/start_coordinator.sh 192.168.1.10 192.168.1.11 192.168.1.12
+```
+
+Verify the multi-PC flow on a single machine before the live demo:
+
+```bash
+./scripts/test_local_multipc.sh        # 3 participants, shifted ports
+make multipc-interactive               # with pause between rounds
+```
+
+See `docs/local-network-ln.md` for the full multi-PC tutorial.
+
+## Running tests
+
+```bash
+# Unit tests — no node required
+make test
+
+# E2E regtest (Bitcoin Core):
+make test-e2e
+
+# E2E Docker LN (Docker):
+make test-ln
 ```
 
 ## Requirements
 
 - Python 3.11+
-- Bitcoin Core (compiled with or without wallet support)
-- `bitcoin-util` in PATH (used for wallet-less PoW grinding)
+- Docker + Docker Compose v2 (for LN demo and e2e Docker tests)
+- Bitcoin Core without wallet support (for regtest e2e only)
 
 ```bash
-pip install -r requirements.txt
-```
-
-Dependencies: `embit`, `python-bitcoinrpc`, `coincurve`, `pytest`.
-
-## Running tests
-
-```bash
-# Unit tests — no Bitcoin node required
-python -m pytest tests/test_protocol.py tests/test_coordinator.py -v
-
-# End-to-end tests — requires a running regtest node
-bash scripts/regtest_setup.sh
-python -m pytest tests/test_e2e_regtest.py -v -s
-```
-
-The e2e tests cover three complete round scenarios on regtest:
-- **Round 0** — cooperative MuSig2 keypath spend
-- **Round 1** — HTLC fallback (leaf1): winner claims by revealing preimage
-- **Round 2** — collective refund (leaf2): k_min participants reclaim funds after timelock
-
-## Bitcoin Core setup
-
-This project works with Bitcoin Core compiled **without wallet support**. Mining uses the wallet-less path: `getblocktemplate` → `bitcoin-util grind` → `submitblock`. UTXO discovery uses `scantxoutset`.
-
-Default RPC configuration (`~/.bitcoin/bitcoin.conf`):
-```
-regtest=1
-server=1
-rpcuser=user
-rpcpassword=password
-rpcport=18443
-txindex=1
-```
-
-## MuSig2 signing flow (cooperative path)
-
-```
-Coordinator                          Participants
-──────────                           ────────────
-setup()                              ← receive round parameters
-  key_agg(pubkeys)
-  apply_tweak(kac, taproot_tweak)
-  → kac.agg_pk == output_key_xonly
-
-prepare_claim_session()              ← claim_tx distributed
-
-                                     generate_nonce(agg_pk)
-collect_pub_nonce() × N              → pub_nonce sent to coordinator
-
-finalize_nonce_aggregation()
-build_session_context()              ← SessionContext distributed
-
-                                     sign_claim(session_ctx)
-collect_partial_sig() × N            → psig sent to coordinator
-
-aggregate_and_broadcast()
-  partial_sig_agg(psigs)
-  → 64-byte Schnorr sig
-  → broadcast claim_tx
+pip install -r requirements.txt          # protocol + tests
+pip install -r requirements-demo.txt     # FastAPI + httpx + pyln-client
 ```
 
 ## Key design decisions
@@ -121,4 +134,5 @@ aggregate_and_broadcast()
 - **One Taproot address per round** — each round has a fresh HTLC hash, so addresses are unlinkable
 - **MuSig2 keypath hides script tree** — on-chain cooperative spends are indistinguishable from single-key P2TR
 - **BIP-342 CHECKSIGADD for refund multisig** — efficient Tapscript threshold with explicit absent-signer slots (`b""`)
-- **Per-input sighash** — BIP-341 commits to `input_index`; multi-input transactions require fresh nonces and separate signatures for each input
+- **Per-input sighash** — BIP-341 commits to `input_index`; multi-input transactions require fresh nonces and separate signatures per input
+- **Hold invoices for LN rounds** — HTLC-based commitment prevents coordinator from paying winner before collecting from all participants

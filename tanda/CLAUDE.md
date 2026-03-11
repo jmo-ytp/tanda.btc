@@ -7,12 +7,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 The `tanda/` package implements the full tanda protocol. Modules are layered — import only downward:
 
 ```
-rpc.py          ← no tanda imports
-htlc.py         ← no tanda imports
-musig2.py       ← no tanda imports
-protocol.py     ← imports musig2
-coordinator.py  ← imports protocol, musig2, htlc, rpc
-participant.py  ← imports protocol, musig2, htlc, rpc
+rpc.py                ← no tanda imports
+htlc.py               ← no tanda imports
+musig2.py             ← no tanda imports
+lnrpc.py              ← no tanda imports
+protocol.py           ← imports musig2
+coordinator.py        ← imports protocol, musig2, htlc, rpc
+participant.py        ← imports protocol, musig2, htlc, rpc
+ledger.py             ← no tanda imports
+api_participant_ln.py ← imports lnrpc, ledger
 ```
 
 ---
@@ -138,3 +141,54 @@ Minimal. `generate_htlc_secret()` → `(preimage, sha256(preimage))`. `verify_pr
 - `scan_utxos(address)` — uses `scantxoutset`; returns `scriptPubKey` as a **hex string**, not a dict
 - `fund_address(address, amount)` — uses `sendtoaddress` if wallet available; otherwise requires `from_utxos`
 - `list_unspent()` — falls back to `scantxoutset` if wallet unavailable
+
+---
+
+## lnrpc.py
+
+`CLNRpc` wraps Core Lightning via `pyln-client` unix socket.
+
+- `CLNRpc(rpc_path)` — connects to `lightning-rpc` socket; path set via `CLN_RPC_PATH` env var
+- `getinfo()` → dict with `id`, `alias`, `color`, `our_features`, etc.
+- `listfunds()` → dict with `channels` and `outputs`
+- `listpeerchannels()` → dict with `channels` list; each channel has `htlcs` list
+- `invoice(amount_msat, label, description)` → dict with `bolt11`, `payment_hash`
+- `holdinvoice(payment_hash, amount_msat)` → hold invoice (requires BoltzExchange/hold plugin)
+- `settleholdinvoice(preimage)` → settles HTLC, reveals preimage to payer
+- `cancelholdinvoice(payment_hash)` → returns HTLCs to payer
+- `pay(bolt11)` → pays a BOLT11 invoice
+- `connect(node_id, host, port)` → opens P2P connection
+- `fundchannel(node_id, amount_sat, push_msat)` → opens channel with optional push
+
+**Hold invoice states:** `UNPAID → ACCEPTED → PAID / CANCELLED`
+
+**HTLC detection:** poll `listpeerchannels().channels[*].htlcs` where `direction == "in"` and `payment_hash` matches.
+
+---
+
+## api_participant_ln.py
+
+FastAPI participant server. Reads `CLN_RPC_PATH` env var on startup.
+
+**Endpoints:**
+- `GET /health` → `{"status":"ok","pubkey_hex":"03...","channels":[...]}`
+- `GET /node_info` → `{"id":"03...","address":{"type":"ipv4",...}}`
+- `POST /invoice` `{"amount_msat":..., "label":..., "description":...}` → `{"bolt11":"lnbcrt..."}`
+- `POST /holdinvoice` `{"payment_hash":"hex","amount_msat":N}` → `{"status":"created"}`
+- `POST /settle` `{"preimage":"hex"}` → `{"status":"settled"}`
+- `POST /cancel` `{"payment_hash":"hex"}` → `{"status":"cancelled"}`
+- `GET /htlcs` `?payment_hash=hex` → `{"htlcs":[{"payment_hash":...,"amount_msat":...,"state":...}]}`
+
+**Lifespan:** CLNRpc instance created once at startup; shared across requests via `app.state.cln`.
+
+---
+
+## ledger.py
+
+`Ledger` tracks per-participant debt and pot contributions. JSON persistence to disk.
+
+- `Ledger(path)` — loads from `path` if exists, else starts fresh
+- `record_contribution(participant_id, round_idx, amount_sats)` — marks participant paid for round
+- `record_win(participant_id, round_idx, amount_sats)` — marks participant received pot
+- `balance(participant_id)` → net sats (positive = owed, negative = received more than contributed)
+- `save()` — writes JSON to disk
