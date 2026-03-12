@@ -310,6 +310,49 @@ curl http://192.168.100.85:18443/
 docker run --rm curlimages/curl http://192.168.100.85:18443/
 ```
 
+---
+
+#### macOS (Docker Desktop)
+
+Docker Desktop en Mac corre en una VM interna — no hay `/proc` ni `iptables`.
+Los contenedores sí pueden alcanzar la LAN, pero el **firewall de la PC-Coord puede estar rechazando conexiones desde la subred Docker** (172.17.0.0/16 o 172.18.0.0/16).
+
+**Paso 1 — Verificar desde qué IP sale el contenedor:**
+
+```bash
+docker run --rm curlimages/curl ifconfig.me
+# o
+docker run --rm alpine ip route
+```
+
+Apunta la IP o subred que usa Docker (p. ej. `172.17.0.2`).
+
+**Paso 2 — En la PC-Coord (Linux), permitir esa subred:**
+
+```bash
+# Permitir subred Docker del participante Mac (ajustar 172.17.0.0/16 si difiere)
+sudo ufw allow from 172.17.0.0/16 to any port 18443
+sudo ufw allow from 172.18.0.0/16 to any port 18443
+
+# Verificar desde la Mac:
+docker run --rm curlimages/curl http://192.168.100.85:18443/
+```
+
+**Paso 3 — Si sigue fallando, reiniciar Docker Desktop:**
+
+```
+Docker Desktop → Quit Docker Desktop → volver a abrir
+```
+
+A veces la VM de Docker Desktop pierde la ruta a la LAN y un reinicio la restaura.
+
+**Alternativa — `--network=host` (solo Linux; no funciona en Mac):**
+En Mac esta opción no tiene efecto porque Docker ya corre en VM.
+
+---
+
+#### Linux
+
 **Causa:** falta IP forwarding y/o regla MASQUERADE en iptables.
 
 **Solución rápida — reiniciar Docker** (a veces recrea sus propias reglas):

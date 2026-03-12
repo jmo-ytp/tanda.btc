@@ -12,87 +12,87 @@ curl http://192.168.100.85:18443/
 docker run --rm curlimages/curl http://192.168.100.85:18443/
 ```
 
-## Causa
-
-Docker necesita IP forwarding habilitado en el kernel y una regla MASQUERADE en iptables para que los contenedores puedan enrutar tráfico hacia IPs externas (fuera del bridge de Docker).
-
 ---
 
-## Solución
+## macOS (Docker Desktop)
 
-### 1. Verificar estado actual
+Docker Desktop en Mac corre en una VM interna — **no hay `/proc` ni `iptables`**.
+Los contenedores sí pueden alcanzar la LAN, pero el firewall de la PC-Coord puede estar rechazando conexiones desde la subred Docker (172.17.0.0/16 o 172.18.0.0/16).
 
-```bash
-cat /proc/sys/net/ipv4/ip_forward
-# Si imprime 0 → está deshabilitado, continúa con el paso 2
-# Si imprime 1 → ya está habilitado, ve al paso 3
-```
-
-### 2. Habilitar IP forwarding
+### 1. Ver qué IP usa el contenedor
 
 ```bash
-sudo sysctl -w net.ipv4.ip_forward=1
+docker run --rm alpine ip route
+# La IP de salida es algo como 172.17.0.1 o 172.18.0.1
 ```
 
-### 3. Identificar la interfaz de red
+### 2. En la PC-Coord (Linux), permitir esa subred
 
 ```bash
-ip route | grep default
-# Ejemplo de salida: default via 192.168.100.1 dev eth0 proto dhcp ...
-#                                                        ^^^^
-#                                                   esta es la interfaz
+sudo ufw allow from 172.17.0.0/16 to any port 18443
+sudo ufw allow from 172.18.0.0/16 to any port 18443
 ```
 
-La interfaz suele llamarse `eth0`, `wlan0`, `enp3s0`, `ens33`, etc.
-
-### 4. Añadir regla MASQUERADE
-
-Sustituye `eth0` por la interfaz real del paso anterior:
-
-```bash
-sudo iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
-```
-
-### 5. Verificar que funciona
+### 3. Verificar
 
 ```bash
 docker run --rm curlimages/curl http://192.168.100.85:18443/
-# Debe responder (aunque sea un error HTTP 401, eso ya es conexión exitosa)
+# Una respuesta HTTP (aunque sea 401) confirma conectividad
 ```
+
+### Si sigue fallando: reiniciar Docker Desktop
+
+```
+Docker Desktop → Quit Docker Desktop → volver a abrir
+```
+
+A veces la VM pierde la ruta a la LAN y un reinicio la restaura.
 
 ---
 
-## Hacer los cambios permanentes
+## Linux
 
-Sin esto, los cambios se pierden al reiniciar la PC.
+**Causa:** falta IP forwarding y/o regla MASQUERADE en iptables.
 
-```bash
-# Instalar iptables-persistent
-sudo apt-get install -y iptables-persistent
-
-# Guardar las reglas actuales
-sudo netfilter-persistent save
-
-# IP forwarding permanente
-echo 'net.ipv4.ip_forward=1' | sudo tee -a /etc/sysctl.conf
-```
-
----
-
-## Alternativa rápida (sin tocar iptables)
-
-Si no quieres modificar iptables, puedes reiniciar el servicio Docker — a veces Docker recrea sus propias reglas al arrancar:
+### Solución rápida — reiniciar Docker
 
 ```bash
 sudo systemctl restart docker
 docker run --rm curlimages/curl http://192.168.100.85:18443/
 ```
 
+### Solución completa
+
+```bash
+# 1. Verificar IP forwarding (debe ser 1)
+cat /proc/sys/net/ipv4/ip_forward
+
+# 2. Habilitarlo si es 0
+sudo sysctl -w net.ipv4.ip_forward=1
+
+# 3. Ver la interfaz de red (eth0, wlan0, enp3s0…)
+ip route | grep default
+# Ejemplo: default via 192.168.100.1 dev eth0 ...
+#                                         ^^^^
+
+# 4. Añadir regla MASQUERADE (sustituir eth0 por la interfaz real)
+sudo iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+
+# 5. Verificar
+docker run --rm curlimages/curl http://192.168.100.85:18443/
+```
+
+### Hacer los cambios permanentes
+
+```bash
+sudo apt-get install -y iptables-persistent
+sudo netfilter-persistent save
+echo 'net.ipv4.ip_forward=1' | sudo tee -a /etc/sysctl.conf
+```
+
 ---
 
 ## Levantar el participante después del fix
-
-Una vez que el contenedor Docker tenga conectividad, levantar el nodo participante normalmente:
 
 ```bash
 # Sustituir 192.168.100.85 por la IP real del coordinador
