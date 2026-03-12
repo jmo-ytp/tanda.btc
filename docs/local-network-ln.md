@@ -312,85 +312,48 @@ docker run --rm curlimages/curl http://192.168.100.85:18443/
 
 ---
 
-#### macOS (Docker Desktop)
-
-Docker Desktop en Mac corre en una VM interna — no hay `/proc` ni `iptables`.
-Los contenedores sí pueden alcanzar la LAN, pero el **firewall de la PC-Coord puede estar rechazando conexiones desde la subred Docker** (172.17.0.0/16 o 172.18.0.0/16).
-
-**Paso 1 — Verificar desde qué IP sale el contenedor:**
+#### Diagnóstico rápido (cualquier OS)
 
 ```bash
-docker run --rm curlimages/curl ifconfig.me
-# o
+# Ver qué subred usa Docker en este equipo
 docker run --rm alpine ip route
+
+# Probar conectividad desde un contenedor
+docker run --rm curlimages/curl -v http://<IP-coord>:18443/
+# Respuesta HTTP (aunque sea 401) = OK; "Failed to connect" = bloqueado en PC-Coord
 ```
 
-Apunta la IP o subred que usa Docker (p. ej. `172.17.0.2`).
+#### PC-Coord: Parrot OS
 
-**Paso 2 — En la PC-Coord (Linux), permitir esa subred:**
+Parrot usa `nftables`. Abrir el rango completo de subredes Docker (172.16.0.0/12):
 
 ```bash
-# Permitir subred Docker del participante Mac (ajustar 172.17.0.0/16 si difiere)
-sudo ufw allow from 172.17.0.0/16 to any port 18443
-sudo ufw allow from 172.18.0.0/16 to any port 18443
-
-# Verificar desde la Mac:
-docker run --rm curlimages/curl http://192.168.100.85:18443/
+sudo nft add rule inet filter input ip saddr 172.16.0.0/12 tcp dport 18443 accept
+# Persistir:
+sudo nft list ruleset > /etc/nftables.conf && sudo systemctl enable nftables
 ```
 
-**Paso 3 — Si sigue fallando, reiniciar Docker Desktop:**
+#### Participante: macOS (Docker Desktop)
 
-```
-Docker Desktop → Quit Docker Desktop → volver a abrir
-```
+Docker Desktop corre en VM — no hay `/proc` ni `iptables`. La regla en la PC-Coord
+(`172.16.0.0/12`) es suficiente. Si sigue fallando: **Quit Docker Desktop → reabrir**.
 
-A veces la VM de Docker Desktop pierde la ruta a la LAN y un reinicio la restaura.
-
-**Alternativa — `--network=host` (solo Linux; no funciona en Mac):**
-En Mac esta opción no tiene efecto porque Docker ya corre en VM.
-
----
-
-#### Linux
-
-**Causa:** falta IP forwarding y/o regla MASQUERADE en iptables.
-
-**Solución rápida — reiniciar Docker** (a veces recrea sus propias reglas):
+#### Participante: Arch Linux
 
 ```bash
-sudo systemctl restart docker
-docker run --rm curlimages/curl http://192.168.100.85:18443/
-```
-
-**Solución completa:**
-
-```bash
-# 1. Verificar IP forwarding (debe ser 1)
-cat /proc/sys/net/ipv4/ip_forward
-
-# 2. Habilitarlo si es 0
+# Habilitar IP forwarding
 sudo sysctl -w net.ipv4.ip_forward=1
+echo 'net.ipv4.ip_forward=1' | sudo tee /etc/sysctl.d/99-docker.conf
 
-# 3. Ver la interfaz de red (eth0, wlan0, enp3s0…)
-ip route | grep default
-# Ejemplo: default via 192.168.100.1 dev eth0 ...
-#                                         ^^^^
+# Ver interfaz de salida y añadir MASQUERADE
+ip route | grep default   # anotar interfaz (p.ej. enp3s0)
+sudo iptables -t nat -A POSTROUTING -o enp3s0 -j MASQUERADE
 
-# 4. Añadir regla MASQUERADE (sustituir eth0 por la interfaz real)
-sudo iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
-
-# 5. Verificar
-docker run --rm curlimages/curl http://192.168.100.85:18443/
-# Una respuesta HTTP (aunque sea 401) confirma conectividad
+# O reiniciar Docker (a veces recrea sus reglas solo)
+sudo systemctl restart docker
 ```
 
-**Hacer los cambios permanentes** (sobreviven al reinicio):
-
-```bash
-sudo apt-get install -y iptables-persistent
-sudo netfilter-persistent save
-echo 'net.ipv4.ip_forward=1' | sudo tee -a /etc/sysctl.conf
-```
+Ver `docs/multipc-troubleshooting.md` para instrucciones completas por OS.
 
 ---
 
