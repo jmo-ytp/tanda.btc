@@ -2,6 +2,7 @@
         multipc multipc-interactive \
         coord coord-run coord-down \
         participant participant-down \
+        participant-0 participant-1 participant-0-down participant-1-down \
         test test-ln test-e2e
 
 # ── Una sola máquina ──────────────────────────────────────────────────────────
@@ -60,6 +61,23 @@ participant:
 
 participant-down:
 	docker compose -f deploy/participant.yml down -v
+
+# Dos participantes en la misma máquina (puertos desplazados, project names distintos):
+#   BITCOIND_HOST=192.168.1.10 make participant-0
+#   BITCOIND_HOST=192.168.1.10 make participant-1
+participant-0:
+	CLN_P2P_PORT=9735 API_PORT=8080 \
+	  docker compose -p tanda-p0 -f deploy/participant.yml up --build -d
+
+participant-1:
+	CLN_P2P_PORT=9736 API_PORT=8081 \
+	  docker compose -p tanda-p1 -f deploy/participant.yml up --build -d
+
+participant-0-down:
+	docker compose -p tanda-p0 -f deploy/participant.yml down -v
+
+participant-1-down:
+	docker compose -p tanda-p1 -f deploy/participant.yml down -v
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
